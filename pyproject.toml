@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-sonnet-5.8"
+version = "0.1.0"
+description = "A minimal from-scratch transformer inspired by Claude-style chat models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26.0",
+]
+
+[project.scripts]
+claude-sonnet-5.8 = "claude_sonnet.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

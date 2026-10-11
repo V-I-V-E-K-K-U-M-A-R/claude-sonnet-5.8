@@ -1,0 +1,136 @@
+import numpy as np
+
+
+def softmax(x, axis=-1):
+    x = x - np.max(x, axis=axis, keepdims=True)
+    e = np.exp(x)
+    return e / np.sum(e, axis=axis, keepdims=True)
+
+
+def gelu(x):
+    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x**3)))
+
+
+class CausalSelfAttention:
+    def __init__(self, dim, n_heads, context_window):
+        self.dim = dim
+        self.n_heads = n_heads
+        self.head_dim = dim // n_heads
+        self.context_window = context_window
+
+        scale = 1.0 / np.sqrt(self.head_dim)
+        self.q_proj = np.random.default_rng(7).normal(0.0, 0.02, size=(dim, dim))
+        self.k_proj = np.random.default_rng(11).normal(0.0, 0.02, size=(dim, dim))
+        self.v_proj = np.random.default_rng(13).normal(0.0, 0.02, size=(dim, dim))
+        self.out_proj = np.random.default_rng(17).normal(0.0, 0.02, size=(dim, dim))
+        self.scale = scale
+
+    def forward(self, x):
+        batch_size, seq_len, dim = x.shape
+        q = x @ self.q_proj
+        k = x @ self.k_proj
+        v = x @ self.v_proj
+
+        q = q.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
+        k = k.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
+        v = v.reshape(batch_size, seq_len, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        scores = (q @ k.transpose(0, 1, 3, 2)) * self.scale
+        mask = np.triu(np.ones((seq_len, seq_len), dtype=bool), k=1)
+        scores = np.where(mask, -1e9, scores)
+        attn = softmax(scores, axis=-1)
+        out = attn @ v
+        out = out.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, dim)
+        return out @ self.out_proj
+
+
+class FeedForward:
+    def __init__(self, dim, hidden_dim):
+        rng = np.random.default_rng(23)
+        self.w1 = rng.normal(0.0, 0.02, size=(dim, hidden_dim))
+        self.b1 = np.zeros(hidden_dim)
+        self.w2 = rng.normal(0.0, 0.02, size=(hidden_dim, dim))
+        self.b2 = np.zeros(dim)
+
+    def forward(self, x):
+        x1 = gelu(x @ self.w1 + self.b1)
+        return x1 @ self.w2 + self.b2
+
+
+class TransformerBlock:
+    def __init__(self, dim, n_heads, hidden_dim, context_window):
+        self.attn = CausalSelfAttention(dim, n_heads, context_window)
+        self.ffn = FeedForward(dim, hidden_dim)
+        self.ln1 = np.ones(dim)
+        self.ln2 = np.ones(dim)
+        self.ln1_b = np.zeros(dim)
+        self.ln2_b = np.zeros(dim)
+
+    def layer_norm(self, x, gamma, beta):
+        mean = np.mean(x, axis=-1, keepdims=True)
+        var = np.var(x, axis=-1, keepdims=True)
+        return (x - mean) / np.sqrt(var + 1e-5) * gamma + beta
+
+    def forward(self, x):
+        residual = x
+        x = self.layer_norm(x, self.ln1, self.ln1_b)
+        x = self.attn.forward(x)
+        x = residual + x
+
+        residual = x
+        x = self.layer_norm(x, self.ln2, self.ln2_b)
+        x = self.ffn.forward(x)
+        return residual + x
+
+
+class MiniSonnet:
+    def __init__(self, vocab_size, dim=32, n_layers=2, n_heads=4, hidden_dim=64, context_window=64):
+        rng = np.random.default_rng(29)
+        self.vocab_size = vocab_size
+        self.dim = dim
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.hidden_dim = hidden_dim
+        self.context_window = context_window
+
+        self.token_embedding = rng.normal(0.0, 0.02, size=(vocab_size, dim))
+        self.position_embedding = rng.normal(0.0, 0.02, size=(context_window, dim))
+        self.blocks = [
+            TransformerBlock(dim, n_heads, hidden_dim, context_window) for _ in range(n_layers)
+        ]
+        self.final_ln = np.ones(dim)
+        self.final_ln_b = np.zeros(dim)
+        self.output = rng.normal(0.0, 0.02, size=(dim, vocab_size))
+
+    def forward(self, tokens):
+        tokens = np.asarray(tokens, dtype=np.int64)
+        batch_size, seq_len = tokens.shape
+        x = self.token_embedding[tokens]
+        positions = np.arange(seq_len)[None, :, None]
+        x = x + self.position_embedding[positions]
+
+        for block in self.blocks:
+            x = block.forward(x)
+
+        x = self._layer_norm(x, self.final_ln, self.final_ln_b)
+        logits = x @ self.output
+        return logits
+
+    def _layer_norm(self, x, gamma, beta):
+        mean = np.mean(x, axis=-1, keepdims=True)
+        var = np.var(x, axis=-1, keepdims=True)
+        return (x - mean) / np.sqrt(var + 1e-5) * gamma + beta
+
+    def generate(self, tokenizer, prompt, max_new_tokens=32, temperature=0.9):
+        input_ids = tokenizer.encode(prompt)
+        for _ in range(max_new_tokens):
+            if len(input_ids) >= self.context_window:
+                break
+            logits = self.forward(np.array([input_ids], dtype=np.int64))[0, -1]
+            logits = logits / max(temperature, 1e-8)
+            probs = softmax(logits)
+            next_index = int(np.argmax(probs))
+            input_ids.append(next_index)
+            if next_index == tokenizer.eos_id:
+                break
+        return tokenizer.decode(input_ids)
